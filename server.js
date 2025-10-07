@@ -8,7 +8,7 @@ const app = express();
 // ✅ Allow CORS for local dev + deployed frontend
 const allowedOrigins = [
   'http://localhost:3000',
-  'https://heartfelt-douhua-d4fc94.netlify.app' // ✅ your actual Netlify frontend URL
+  'https://jewelleryshowroom.netlify.app' // ✅ your actual Netlify frontend URL
 ];
 
 app.use(cors({
