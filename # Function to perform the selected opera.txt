@@ -1,0 +1,51 @@
+# Function to perform the selected operation
+def calculate_operations(num1, num2, operation):
+    if operation == 'add':
+        result = num1 + num2
+        # Print result as integer or float based on input type
+        if num1.is_integer() and num2.is_integer():
+            print(f"Addition: {int(num1)} + {int(num2)} = {int(result)}")
+        else:
+            print(f"Addition: {num1} + {num2} = {result}")
+
+    elif operation == 'multiply':
+        result = num1 * num2
+        # Print result as integer or float based on input type
+        if num1.is_integer() and num2.is_integer():
+            print(f"Multiplication: {int(num1)} * {int(num2)} = {int(result)}")
+        else:
+            print(f"Multiplication: {num1} * {num2} = {result}")
+            
+    elif operation == 'divide':
+        if num2 != 0:
+            result = num1 / num2
+            # Print result as integer or float based on input type
+            if result.is_integer():
+                print(f"Division: {int(num1)} / {int(num2)} = {int(result)}")
+            else:
+                print(f"Division: {num1} / {num2} = {result}")
+        else:
+            print("Division: undefined (cannot divide by zero)")
+    else:
+        print("Invalid operation.")
+
+# Run the function multiple times
+while True:
+    try:
+        # Taking two inputs from the user
+        num1 = float(input("Enter the first number: "))
+        num2 = float(input("Enter the second number: "))
+        
+        # Ask the user which operation they want to perform
+        operation = input("Choose the operation (add/multiply/divide): ").strip().lower()
+        
+        # Call the function to perform the calculations
+        calculate_operations(num1, num2, operation)
+        
+        # Ask if the user wants to perform another operation
+        continue_choice = input("Do you want to perform another operation? (yes/no): ").strip().lower()
+        if continue_choice != 'yes':
+            print("Exiting the program.")
+            break
+    except ValueError:
+        print("Invalid input. Please enter valid numbers.")
