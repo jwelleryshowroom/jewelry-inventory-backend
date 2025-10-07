@@ -5,20 +5,22 @@ const cors = require('cors');
 
 const app = express();
 
-// ✅ Allow CORS for both local dev and deployed frontend
+// ✅ Allow CORS for local dev + deployed frontend
 const allowedOrigins = [
   'http://localhost:3000',
-  'https://your-frontend.vercel.app' // ← replace this AFTER frontend is deployed
+  'https://heartfelt-douhua-d4fc94.netlify.app' // ✅ your actual Netlify frontend URL
 ];
 
 app.use(cors({
   origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl)
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
     }
   },
+  methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
   credentials: true
 }));
 
