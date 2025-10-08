@@ -1,154 +1,203 @@
 const express = require("express");
 const router = express.Router();
 const Product = require("../models/Product");
+const XLSX = require("xlsx");
 
-// Helper to generate SKU like "NE01"
+// ✅ Helper to generate SKU
+// ✅ Improved Helper to generate SKU (prevents duplicate error)
+// ✅ Robust Helper to generate SKU (always unique)
 async function generateSKU(name) {
-  const initials = (name || '').slice(0, 2).toUpperCase();
-  const count = await Product.countDocuments({ name: new RegExp(`^${name}`, "i") });
-  const number = (count + 1).toString().padStart(2, "0");
-  return initials + number;
+  const initials = name.slice(0, 2).toUpperCase();
+
+  // Find the highest SKU with the same prefix
+  const lastProduct = await Product.findOne({ sku: new RegExp(`^${initials}`, "i") })
+    .sort({ sku: -1 });
+
+  let nextNumber = 1;
+  if (lastProduct && lastProduct.sku) {
+    const existingNumber = parseInt(lastProduct.sku.slice(2)) || 0;
+    nextNumber = existingNumber + 1;
+  }
+
+  return `${initials}${nextNumber.toString().padStart(2, "0")}`;
 }
+
+
 
 // ✅ Add Product
 router.post("/add", async (req, res) => {
   try {
-    let {
-      name,
-      quantity = 0,
-      unitWeightGr = 0,
-      lowQuantity = 0,
-      addQty = 0,
-      sellQty = 0,
-    } = req.body;
-
-    name = String(name || '').toUpperCase();
-    quantity = Number(quantity) || 0;
-    unitWeightGr = Number(unitWeightGr) || 0;
-    lowQuantity = Number(lowQuantity) || 0;
-    addQty = Number(addQty) || 0;
-    sellQty = Number(sellQty) || 0;
-
+    const { name, quantity, unitWeightGr, lowQuantity } = req.body;
     const sku = await generateSKU(name);
-
-    const openingQty = quantity;
-    const addedQty = addQty > 0 ? addQty : 0;
-    const soldQty = sellQty > 0 ? sellQty : 0;
-    const closingQty = openingQty + addedQty - soldQty;
-    const totalWeightGr = unitWeightGr * closingQty;
+    const totalWeightGr = Number(quantity) * Number(unitWeightGr);
 
     const product = new Product({
+      name: name.toUpperCase(),
       sku,
-      name,
-      quantity: closingQty,
-      unitWeightGr,
+      quantity: Number(quantity),
+      unitWeightGr: Number(unitWeightGr),
       totalWeightGr,
-      lowQuantity,
-      openingQty,
-      addedQty,
-      soldQty,
-      closingQty,
-      date: new Date()
+      lowQuantity: Number(lowQuantity) || 0,
+      openingQty: Number(quantity),
+      addedQty: 0,
+      soldQty: 0,
+      closingQty: Number(quantity),
+      isActive: true,
+      date: new Date(),
     });
 
     await product.save();
     res.status(201).json({ message: "Product added successfully", product });
   } catch (err) {
-    console.error("[ADD ERROR]", err);
     res.status(400).json({ error: err.message });
   }
 });
 
-// ✅ Update Product (Add or Sell stock)
+// ✅ Update Product (Add/Sell logic)
 router.put("/update/:id", async (req, res) => {
   try {
-    console.log("[UPDATE REQUEST]", req.params.id, req.body);
-
-    const {
-      addQty = 0,
-      sellQty = 0,
-      unitWeightGr,
-      lowQuantity,
-      name
-    } = req.body;
-
+    const { addQty = 0, sellQty = 0 } = req.body;
     const product = await Product.findById(req.params.id);
-    if (!product) {
-      console.warn("[UPDATE] Product not found:", req.params.id);
-      return res.status(404).json({ error: "Product not found" });
-    }
+    if (!product) return res.status(404).json({ error: "Product not found" });
 
-    // ✅ Optional: update name only if sent
-    if (name && typeof name === "string") {
-      product.name = name.toUpperCase();
-    }
+    const openingQty = product.openingQty || product.quantity;
+    const newAdded = (Number(product.addedQty) || 0) + Number(addQty);
+    const newSold = (Number(product.soldQty) || 0) + Number(sellQty);
+    const closingQty = openingQty + newAdded - newSold;
 
-    // ✅ Optional: update unit weight & low qty if provided
-    if (unitWeightGr !== undefined && unitWeightGr !== null && unitWeightGr !== "") {
-      product.unitWeightGr = Number(unitWeightGr) || 0;
-    }
-    if (lowQuantity !== undefined && lowQuantity !== null && lowQuantity !== "") {
-      product.lowQuantity = Number(lowQuantity) || 0;
-    }
-
-    // ✅ Safe numeric conversions, ignore negatives
-    const add = Number(addQty) > 0 ? Number(addQty) : 0;
-    const sell = Number(sellQty) > 0 ? Number(sellQty) : 0;
-
-    // ✅ Initialize openingQty if missing
-    if (!product.openingQty || product.openingQty <= 0) {
-      product.openingQty = Number(product.quantity || 0);
-    }
-
-    // ✅ Increment cumulative totals
-    product.addedQty = (Number(product.addedQty) || 0) + add;
-    product.soldQty = (Number(product.soldQty) || 0) + sell;
-
-    // ✅ Recalculate closingQty, quantity, and total weight
-    const opening = Number(product.openingQty) || 0;
-    const closing = opening + product.addedQty - product.soldQty;
-
-    product.closingQty = closing;
-    product.quantity = closing;
-    product.totalWeightGr = (Number(product.unitWeightGr) || 0) * closing;
-
+    product.addedQty = newAdded;
+    product.soldQty = newSold;
+    product.closingQty = closingQty;
+    product.quantity = closingQty;
+    product.totalWeightGr = closingQty * product.unitWeightGr;
     await product.save();
-
-    console.log("[UPDATE SUCCESS]", {
-      id: product._id,
-      opening,
-      addedQty: product.addedQty,
-      soldQty: product.soldQty,
-      closingQty: product.closingQty,
-      quantity: product.quantity,
-      totalWeightGr: product.totalWeightGr
-    });
 
     res.json({ message: "Product updated successfully", product });
   } catch (err) {
-    console.error("[UPDATE ERROR]", err);
     res.status(400).json({ error: err.message });
   }
 });
 
-// ✅ Delete Product
+// ✅ Soft Delete Product (Archive it)
+router.put("/soft-delete/:id", async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: "Product not found" });
+
+    product.isActive = false;
+    await product.save();
+
+    res.json({ message: "Product archived successfully", product });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ✅ Restore Archived Product
+router.put("/restore/:id", async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: "Product not found" });
+
+    product.isActive = true;
+    await product.save();
+
+    res.json({ message: "Product restored successfully", product });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ✅ Hard Delete (permanent removal)
 router.delete("/delete/:id", async (req, res) => {
   try {
     const product = await Product.findByIdAndDelete(req.params.id);
     if (!product) return res.status(404).json({ error: "Product not found" });
-    res.json({ message: "Product deleted successfully" });
+
+    res.json({ message: "Product permanently deleted" });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// ✅ Get all Products
+// ✅ Get all active products
 router.get("/", async (req, res) => {
   try {
-    const products = await Product.find().sort({ createdAt: -1 });
+    const products = await Product.find({ isActive: true });
     res.json(products);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Get all archived products
+router.get("/archived", async (req, res) => {
+  try {
+    const archived = await Product.find({ isActive: false });
+    res.json(archived);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Get ALL products (active + archived)
+router.get("/all", async (req, res) => {
+  try {
+    const products = await Product.find();
+    res.json(products);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Export products as Excel (with optional date range)
+router.get("/export", async (req, res) => {
+  try {
+    const { start, end } = req.query;
+    let filter = {};
+
+    if (start && end) {
+      filter.date = {
+        $gte: new Date(start),
+        $lte: new Date(new Date(end).setHours(23, 59, 59, 999)),
+      };
+    }
+
+    const products = await Product.find(filter).sort({ date: 1 });
+    if (!products.length) {
+      return res.status(404).json({ error: "No products found in this range." });
+    }
+
+    const data = products.map((p) => ({
+      SKU: p.sku,
+      Name: p.name,
+      Opening: p.openingQty,
+      Added: p.addedQty,
+      Sold: p.soldQty,
+      Closing: p.closingQty,
+      Archived: p.isActive ? "No" : "Yes",
+      Date: new Date(p.date).toLocaleDateString(),
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Inventory Data");
+
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=inventory_export_${Date.now()}.xlsx`
+    );
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+
+    res.send(buffer);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to export data" });
   }
 });
 
