@@ -13,7 +13,6 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl)
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
@@ -34,6 +33,10 @@ app.get('/api/health', (req, res) => {
 // ✅ Product Routes
 const productRoutes = require('./routes/productRoutes');
 app.use('/api/products', productRoutes);
+
+// ✅ Auth Routes  🔐  <-- ADD THIS
+const authRoutes = require('./routes/authRoutes');
+app.use('/api/auth', authRoutes);
 
 // ✅ MongoDB connection
 mongoose.connect(process.env.MONGODB_URI)

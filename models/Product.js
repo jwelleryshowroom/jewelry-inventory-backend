@@ -1,22 +1,21 @@
+// models/Product.js
 const mongoose = require("mongoose");
 
 const productSchema = new mongoose.Schema(
   {
-    sku: { type: String, index: true }, // no "unique",
+    sku: { type: String, index: true },
     name: { type: String, required: true },
-    quantity: { type: Number, default: 0 }, // current/closing quantity
-    unitWeightGr: { type: Number, default: 0 },
-    totalWeightGr: { type: Number, default: 0 },
+    quantity: { type: Number, default: 0 }, // current stock
     lowQuantity: { type: Number, default: 0 },
 
-    // Tracking fields
+    // Stock tracking fields
     openingQty: { type: Number, default: 0 },
     addedQty: { type: Number, default: 0 },
     soldQty: { type: Number, default: 0 },
     closingQty: { type: Number, default: 0 },
 
-    date: { type: Date, default: Date.now }, // local date
-    isActive: { type: Boolean, default: true }, // NEW: for soft delete
+    date: { type: Date, default: Date.now },
+    isActive: { type: Boolean, default: true }, // soft delete flag
   },
   { timestamps: true }
 );
