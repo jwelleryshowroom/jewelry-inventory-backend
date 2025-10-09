@@ -9,6 +9,7 @@ const app = express();
 const allowedOrigins = [
   'http://localhost:3000',
   'https://jewelleryshowroom.netlify.app' // ✅ your actual Netlify frontend URL
+  'https://omjewellersinventory.netlify.app' // client url
 ];
 
 app.use(cors({
