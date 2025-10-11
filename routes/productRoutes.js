@@ -244,111 +244,133 @@ router.get("/transactions/:id", auth(["admin", "staff"]), async (req, res) => {
   }
 });
 
-// ✅ Export products as Excel (admin or staff)
+// ✅ Export transactions as Excel (TransactionLog-based) — uses only updatedAt for column + sorting
 router.get("/export", auth(["admin", "staff"]), async (req, res) => {
   try {
     const { type, start, end } = req.query;
     let filter = {};
     let rangeLabel = "";
-
     let startDate, endDate;
 
-    // 🧭 Correct IST-based date range calculation
+    // --- IST-based time setup ---
+    const nowIST = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+    const currentIST = new Date(nowIST);
+
     switch (type) {
-      case "today": {
-        const nowIST = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
-        const todayIST = new Date(nowIST);
-        startDate = new Date(todayIST.setHours(0, 0, 0, 0));
-        endDate = new Date(todayIST.setHours(23, 59, 59, 999));
+      case "today":
+        startDate = new Date(currentIST.setHours(0, 0, 0, 0));
+        endDate = new Date(currentIST.setHours(23, 59, 59, 999));
         rangeLabel = "Today";
         break;
-      }
-
       case "yesterday": {
-        const nowIST = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
-        const yesterdayIST = new Date(new Date(nowIST).getTime() - 24 * 60 * 60 * 1000);
-        startDate = new Date(yesterdayIST.setHours(0, 0, 0, 0));
-        endDate = new Date(yesterdayIST.setHours(23, 59, 59, 999));
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        startDate = new Date(yesterday.setHours(0, 0, 0, 0));
+        endDate = new Date(yesterday.setHours(23, 59, 59, 999));
         rangeLabel = "Yesterday";
         break;
       }
-
-      case "this_month": {
-        const nowIST = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
-        const currentIST = new Date(nowIST);
+      case "this_month":
         startDate = new Date(currentIST.getFullYear(), currentIST.getMonth(), 1);
         endDate = new Date();
         rangeLabel = "This Month";
         break;
-      }
-
-      case "last_3_months": {
-        const nowIST = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
-        const currentIST = new Date(nowIST);
+      case "last_3_months":
         startDate = new Date(currentIST.getFullYear(), currentIST.getMonth() - 2, 1);
         endDate = new Date();
         rangeLabel = "Last 3 Months";
         break;
-      }
-
-      case "this_year": {
-        const nowIST = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
-        const currentIST = new Date(nowIST);
+      case "this_year":
         startDate = new Date(currentIST.getFullYear(), 0, 1);
         endDate = new Date();
         rangeLabel = "This Year";
         break;
-      }
-
-      case "custom": {
+      case "custom":
         if (start && end) {
-          const startIST = new Date(new Date(start).toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-          const endIST = new Date(new Date(end).toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+          const startIST = new Date(
+            new Date(start).toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+          );
+          const endIST = new Date(
+            new Date(end).toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+          );
           startDate = new Date(startIST.setHours(0, 0, 0, 0));
           endDate = new Date(endIST.setHours(23, 59, 59, 999));
           rangeLabel = `${start} → ${end}`;
         }
         break;
-      }
-
-      default: {
-        startDate = null;
-        endDate = null;
+      default:
         rangeLabel = "All Data";
-      }
     }
 
-    if (startDate && endDate) filter.date = { $gte: startDate, $lte: endDate };
+    if (startDate && endDate)
+      filter.updatedAt = { $gte: startDate, $lte: endDate }; // ✅ use updatedAt for date filtering
 
-    const products = await Product.find(filter).sort({ date: 1 });
-    if (!products.length) return res.status(404).json({ error: "No products found in this range." });
+    // --- Aggregate TransactionLog + enrich with Product ---
+    const pipeline = [
+      { $match: filter },
+      { $addFields: { productIdStr: { $toString: "$productId" } } },
+      {
+        $lookup: {
+          from: "products",
+          let: { pidStr: "$productIdStr" },
+          pipeline: [
+            { $addFields: { idStr: { $toString: "$_id" } } },
+            { $match: { $expr: { $eq: ["$idStr", "$$pidStr"] } } },
+            { $project: { sku: 1, name: 1, isActive: 1 } },
+          ],
+          as: "productInfo",
+        },
+      },
+      { $unwind: { path: "$productInfo", preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          sku: { $ifNull: ["$productInfo.sku", "$sku"] },
+          name: { $ifNull: ["$productInfo.name", "$productName"] },
+          openingQty: 1,
+          addedQty: 1,
+          soldQty: 1,
+          closingQty: 1,
+          remarks: 1,
+          updatedAt: 1, // ✅ only this date field used
+          archived: {
+            $cond: [{ $eq: ["$productInfo.isActive", false] }, "Yes", "No"],
+          },
+        },
+      },
+      { $sort: { updatedAt: 1 } }, // ✅ sort by updatedAt ascending
+    ];
 
-    const data = products.map((p) => ({
-      SKU: p.sku,
-      Name: p.name,
-      Opening: p.openingQty,
-      Added: p.addedQty,
-      Sold: p.soldQty,
-      Closing: p.closingQty,
-      Archived: p.isActive ? "No" : "Yes",
-      Date: new Date(p.date).toLocaleString("en-IN", {
+    const logs = await TransactionLog.aggregate(pipeline);
+
+    if (!logs.length)
+      return res.status(404).json({ error: "No transactions found in this range." });
+
+    // --- Build rows for Excel ---
+    const rows = logs.map((l) => ({
+      SKU: l.sku || "",
+      Name: l.name || "",
+      Opening: l.openingQty ?? 0,
+      Added: l.addedQty ?? 0,
+      Sold: l.soldQty ?? 0,
+      Closing: l.closingQty ?? 0,
+      Remarks: l.remarks || "",
+      "Updated At": new Date(l.updatedAt).toLocaleString("en-IN", {
         timeZone: "Asia/Kolkata",
         dateStyle: "medium",
         timeStyle: "short",
       }),
+      Archived: l.archived || "No",
     }));
 
-    const ws = XLSX.utils.json_to_sheet(data);
+    // --- Generate Excel ---
+    const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
-
-    const safeSheetName = `Inventory - ${rangeLabel}`.substring(0, 31);
+    const safeSheetName = `Transactions - ${rangeLabel}`.substring(0, 31);
     XLSX.utils.book_append_sheet(wb, ws, safeSheetName);
-
     const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename=inventory_${type || "all"}_${Date.now()}.xlsx`
+      `attachment; filename=transactions_${type || "all"}_${Date.now()}.xlsx`
     );
     res.setHeader(
       "Content-Type",
@@ -357,8 +379,169 @@ router.get("/export", auth(["admin", "staff"]), async (req, res) => {
 
     res.send(buffer);
   } catch (err) {
-    console.error("❌ Export Error:", err);
-    res.status(500).json({ error: "Failed to export data" });
+    console.error("❌ Export Error (TransactionLog)", err);
+    res.status(500).json({ error: "Failed to export transaction data" });
+  }
+});
+// ✅ Export transactions as PDF (TransactionLog-based) — uses only updatedAt for filter, sort & display
+router.get("/export-pdf", auth(["admin", "staff"]), async (req, res) => {
+  try {
+    const { type, start, end } = req.query;
+    let filter = {};
+    let rangeLabel = "";
+    let startDate, endDate;
+
+    // --- IST time setup ---
+    const nowIST = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+    const currentIST = new Date(nowIST);
+
+    switch (type) {
+      case "today":
+        startDate = new Date(currentIST.setHours(0, 0, 0, 0));
+        endDate = new Date(currentIST.setHours(23, 59, 59, 999));
+        rangeLabel = "Today";
+        break;
+      case "yesterday": {
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        startDate = new Date(yesterday.setHours(0, 0, 0, 0));
+        endDate = new Date(yesterday.setHours(23, 59, 59, 999));
+        rangeLabel = "Yesterday";
+        break;
+      }
+      case "this_month":
+        startDate = new Date(currentIST.getFullYear(), currentIST.getMonth(), 1);
+        endDate = new Date();
+        rangeLabel = "This Month";
+        break;
+      case "last_3_months":
+        startDate = new Date(currentIST.getFullYear(), currentIST.getMonth() - 2, 1);
+        endDate = new Date();
+        rangeLabel = "Last 3 Months";
+        break;
+      case "this_year":
+        startDate = new Date(currentIST.getFullYear(), 0, 1);
+        endDate = new Date();
+        rangeLabel = "This Year";
+        break;
+      case "custom":
+        if (start && end) {
+          const startIST = new Date(
+            new Date(start).toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+          );
+          const endIST = new Date(
+            new Date(end).toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+          );
+          startDate = new Date(startIST.setHours(0, 0, 0, 0));
+          endDate = new Date(endIST.setHours(23, 59, 59, 999));
+          rangeLabel = `${start} → ${end}`;
+        }
+        break;
+      default:
+        rangeLabel = "All Data";
+    }
+
+    if (startDate && endDate)
+      filter.updatedAt = { $gte: startDate, $lte: endDate }; // ✅ use updatedAt for filtering
+
+    // --- Aggregate TransactionLog and enrich with Product info ---
+    const pipeline = [
+      { $match: filter },
+      { $addFields: { productIdStr: { $toString: "$productId" } } },
+      {
+        $lookup: {
+          from: "products",
+          let: { pidStr: "$productIdStr" },
+          pipeline: [
+            { $addFields: { idStr: { $toString: "$_id" } } },
+            { $match: { $expr: { $eq: ["$idStr", "$$pidStr"] } } },
+            { $project: { sku: 1, name: 1, isActive: 1 } },
+          ],
+          as: "productInfo",
+        },
+      },
+      { $unwind: { path: "$productInfo", preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          sku: { $ifNull: ["$productInfo.sku", "$sku"] },
+          name: { $ifNull: ["$productInfo.name", "$productName"] },
+          openingQty: 1,
+          addedQty: 1,
+          soldQty: 1,
+          closingQty: 1,
+          remarks: 1,
+          updatedAt: 1,
+          archived: {
+            $cond: [{ $eq: ["$productInfo.isActive", false] }, "Yes", "No"],
+          },
+        },
+      },
+      { $sort: { updatedAt: -1 } }, // ✅ sort by updatedAt descending (latest first)
+    ];
+
+    const logs = await TransactionLog.aggregate(pipeline);
+
+    if (!logs.length)
+      return res.status(404).json({ error: "No transactions found in this range." });
+
+    // --- Prepare jsPDF ---
+    const jsPDF = require("jspdf").jsPDF;
+    const autoTable = require("jspdf-autotable").default || require("jspdf-autotable");
+
+    const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "A4" });
+
+    // Header
+    doc.setFontSize(16);
+    doc.text("Jewellery Inventory Transactions", 40, 40);
+    doc.setFontSize(11);
+    doc.text(`Range: ${rangeLabel}`, 40, 60);
+
+    // --- Prepare table ---
+    const tableHead = [
+      ["SKU", "Name", "Opening", "Added", "Sold", "Closing", "Remarks", "Updated At", "Archived"],
+    ];
+    const tableBody = logs.map((t) => [
+      t.sku || "",
+      t.name || "",
+      t.openingQty ?? 0,
+      t.addedQty ?? 0,
+      t.soldQty ?? 0,
+      t.closingQty ?? 0,
+      t.remarks || "",
+      new Date(t.updatedAt).toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        dateStyle: "medium",
+        timeStyle: "short",
+      }),
+      t.archived || "No",
+    ]);
+
+    // --- Generate table ---
+    (autoTable.default || autoTable)(doc, {
+      startY: 80,
+      head: tableHead,
+      body: tableBody,
+      theme: "grid",
+      styles: { fontSize: 8, cellPadding: 4 },
+      headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [245, 245, 245] },
+    });
+
+    // Footer
+    const generatedAt = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+    doc.setFontSize(9);
+    doc.text(`Generated on: ${generatedAt}`, 40, doc.internal.pageSize.height - 20);
+
+    // --- Send PDF file ---
+    const pdfData = doc.output("arraybuffer");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=transactions_${type || "all"}_${Date.now()}.pdf`
+    );
+    res.contentType("application/pdf");
+    res.send(Buffer.from(pdfData));
+  } catch (err) {
+    console.error("❌ PDF Export Error:", err);
+    res.status(500).json({ error: "Failed to export PDF" });
   }
 });
 
